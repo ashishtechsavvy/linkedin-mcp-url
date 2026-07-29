@@ -1,116 +1,162 @@
-import express from 'express';
-import cors from 'cors';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { registerLinkedInTools } from './tools/linkedin-tools.js';
-import { storeToken } from './services/linkedin.js';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
+import {
+  getValidToken,
+  getProfile,
+  createPost,
+  deletePost,
+  getPostAnalytics,
+  getMyPosts,
+  getToken,
+} from '../services/linkedin.js';
 
-const REQUIRED_ENV = ['LINKEDIN_CLIENT_ID', 'LINKEDIN_CLIENT_SECRET', 'LINKEDIN_REDIRECT_URI'];
-for (const key of REQUIRED_ENV) {
-  if (!process.env[key]) {
-    console.error(`Missing required env var: ${key}`);
-    process.exit(1);
-  }
-}
+export function registerLinkedInTools(server: Server): void {
 
-const CLIENT_ID = process.env.LINKEDIN_CLIENT_ID!;
-const CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET!;
-const REDIRECT_URI = process.env.LINKEDIN_REDIRECT_URI!;
-const PORT = parseInt(process.env.PORT ?? '3000');
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [
+      {
+        name: 'linkedin_check_auth',
+        description: 'Check whether a user has a valid LinkedIn token. Returns { authenticated, hasRefreshToken, expiresAt, isExpired }',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            user_id: { type: 'string', description: 'Internal user ID' },
+          },
+          required: ['user_id'],
+        },
+      },
+      {
+        name: 'linkedin_get_profile',
+        description: 'Get LinkedIn profile (name, ID, headline). Returns { id, firstName, lastName, headline }',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            user_id: { type: 'string', description: 'Internal user ID' },
+          },
+          required: ['user_id'],
+        },
+      },
+      {
+        name: 'linkedin_create_post',
+        description: 'Publish a text post to LinkedIn. Returns { postId, authorUrn, visibility, message }',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            user_id: { type: 'string' },
+            person_linkedin_id: { type: 'string', description: 'From linkedin_get_profile' },
+            text: { type: 'string', description: 'Post content max 3000 chars' },
+            visibility: { type: 'string', enum: ['PUBLIC', 'CONNECTIONS', 'LOGGED_IN'], default: 'PUBLIC' },
+            author_type: { type: 'string', enum: ['person', 'organization'], default: 'person' },
+            organization_id: { type: 'string', description: 'Required if author_type is organization' },
+          },
+          required: ['user_id', 'person_linkedin_id', 'text'],
+        },
+      },
+      {
+        name: 'linkedin_get_my_posts',
+        description: 'Get recent posts by the authenticated user. Returns { count, posts[] }',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            user_id: { type: 'string' },
+            person_linkedin_id: { type: 'string' },
+            count: { type: 'number', default: 10, description: '1-50' },
+          },
+          required: ['user_id', 'person_linkedin_id'],
+        },
+      },
+      {
+        name: 'linkedin_get_post_analytics',
+        description: 'Get likes and comments for a post. Returns { postId, likeCount, commentCount }',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            user_id: { type: 'string' },
+            post_id: { type: 'string', description: 'LinkedIn post URN' },
+          },
+          required: ['user_id', 'post_id'],
+        },
+      },
+      {
+        name: 'linkedin_delete_post',
+        description: 'Permanently delete a LinkedIn post you own.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            user_id: { type: 'string' },
+            post_id: { type: 'string', description: 'LinkedIn post URN' },
+          },
+          required: ['user_id', 'post_id'],
+        },
+      },
+    ],
+  }));
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params;
+    const a = (args ?? {}) as Record<string, string | number | undefined>;
 
-app.get('/auth/linkedin', (req, res) => {
-  const userId = req.query.user_id as string;
-  if (!userId) { res.status(400).json({ error: 'user_id required' }); return; }
+    try {
+      switch (name) {
 
-  const state = Buffer.from(JSON.stringify({ userId, ts: Date.now() })).toString('base64');
-  const scopes = ['r_liteprofile', 'r_emailaddress', 'w_member_social'].join(' ');
+        case 'linkedin_check_auth': {
+          const token = getToken(a.user_id as string);
+          return { content: [{ type: 'text', text: JSON.stringify({
+            authenticated: !!token,
+            hasRefreshToken: !!token?.refresh_token,
+            expiresAt: token ? new Date(token.expires_at).toISOString() : null,
+            isExpired: token ? Date.now() >= token.expires_at : null,
+          }, null, 2) }] };
+        }
 
-  const authUrl = new URL('https://www.linkedin.com/oauth/v2/authorization');
-  authUrl.searchParams.set('response_type', 'code');
-  authUrl.searchParams.set('client_id', CLIENT_ID);
-  authUrl.searchParams.set('redirect_uri', REDIRECT_URI);
-  authUrl.searchParams.set('scope', scopes);
-  authUrl.searchParams.set('state', state);
-  res.redirect(authUrl.toString());
-});
+        case 'linkedin_get_profile': {
+          const token = await getValidToken(a.user_id as string);
+          const profile = await getProfile(token);
+          return { content: [{ type: 'text', text: JSON.stringify(profile, null, 2) }] };
+        }
 
-app.get('/auth/callback', async (req, res) => {
-  const { code, state, error } = req.query as Record<string, string>;
-  if (error) { res.status(400).json({ error: `LinkedIn denied: ${error}` }); return; }
-  if (!code || !state) { res.status(400).json({ error: 'Missing code or state' }); return; }
+        case 'linkedin_create_post': {
+          const token = await getValidToken(a.user_id as string);
+          const authorType = (a.author_type as string) ?? 'person';
+          let authorUrn: string;
+          if (authorType === 'organization') {
+            if (!a.organization_id) throw new Error('organization_id required');
+            authorUrn = `urn:li:organization:${a.organization_id}`;
+          } else {
+            authorUrn = `urn:li:person:${a.person_linkedin_id}`;
+          }
+          const visibility = (a.visibility as 'PUBLIC' | 'CONNECTIONS' | 'LOGGED_IN') ?? 'PUBLIC';
+          const postId = await createPost(token, authorUrn, a.text as string, visibility);
+          return { content: [{ type: 'text', text: JSON.stringify({ postId, authorUrn, visibility, message: 'Post published successfully' }, null, 2) }] };
+        }
 
-  let userId: string;
-  try {
-    userId = JSON.parse(Buffer.from(state, 'base64').toString('utf-8')).userId;
-  } catch { res.status(400).json({ error: 'Invalid state' }); return; }
+        case 'linkedin_get_my_posts': {
+          const token = await getValidToken(a.user_id as string);
+          const posts = await getMyPosts(token, a.person_linkedin_id as string, (a.count as number) ?? 10);
+          return { content: [{ type: 'text', text: JSON.stringify({ count: posts.length, posts }, null, 2) }] };
+        }
 
-  try {
-    const tokenRes = await fetch('https://www.linkedin.com/oauth/v2/accessToken', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: REDIRECT_URI,
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-      }),
-    });
-    if (!tokenRes.ok) throw new Error('Token exchange failed');
-    const tokenData = await tokenRes.json() as {
-      access_token: string;
-      expires_in: number;
-      refresh_token?: string;
-    };
+        case 'linkedin_get_post_analytics': {
+          const token = await getValidToken(a.user_id as string);
+          const analytics = await getPostAnalytics(token, a.post_id as string);
+          return { content: [{ type: 'text', text: JSON.stringify(analytics, null, 2) }] };
+        }
 
-    const profileRes = await fetch('https://api.linkedin.com/v2/me', {
-      headers: { Authorization: `Bearer ${tokenData.access_token}` },
-    });
-    const profile = await profileRes.json() as { id: string };
+        case 'linkedin_delete_post': {
+          const token = await getValidToken(a.user_id as string);
+          await deletePost(token, a.post_id as string);
+          return { content: [{ type: 'text', text: JSON.stringify({ deleted: true, postId: a.post_id }, null, 2) }] };
+        }
 
-    storeToken(userId, {
-      access_token: tokenData.access_token,
-      refresh_token: tokenData.refresh_token,
-      expires_at: Date.now() + tokenData.expires_in * 1000,
-      person_id: profile.id,
-    });
-
-    res.json({
-      success: true,
-      person_id: profile.id,
-      expires_in_days: Math.floor(tokenData.expires_in / 86400),
-    });
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
-  }
-});
-
-app.post('/mcp', async (req, res) => {
-  const server = new Server(
-    { name: 'linkedin-mcp-server', version: '1.0.0' },
-    { capabilities: { tools: {} } }
-  );
-  registerLinkedInTools(server);
-
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
+        default:
+          throw new Error(`Unknown tool: ${name}`);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
+    }
   });
-  res.on('close', () => transport.close());
-  await server.connect(transport);
-  await transport.handleRequest(req, res, req.body);
-});
-
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'linkedin-mcp-server' });
-});
-
-app.listen(PORT, () => {
-  console.log(`LinkedIn MCP Server on port ${PORT}`);
-  console.log(`Auth: GET /auth/linkedin?user_id=YOUR_ID`);
-  console.log(`MCP:  POST /mcp`);
-});
+}
