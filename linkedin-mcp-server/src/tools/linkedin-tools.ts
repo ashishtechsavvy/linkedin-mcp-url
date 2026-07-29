@@ -97,7 +97,7 @@ export function registerLinkedInTools(server: Server): void {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
-    const a = args as Record<string, string | number | undefined>;
+    const a = (args ?? {}) as Record<string, string | number | undefined>;
 
     try {
       switch (name) {
