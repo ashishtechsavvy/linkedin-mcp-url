@@ -1,20 +1,16 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "dist/index.js",
-      "use": "@vercel/node"
+  "buildCommand": "npm run build",
+  "outputDirectory": ".",
+  "functions": {
+    "dist/index.js": {
+      "runtime": "nodejs20.x"
     }
-  ],
+  },
   "routes": [
     {
       "src": "/(.*)",
       "dest": "dist/index.js"
     }
-  ],
-  "env": {
-    "LINKEDIN_CLIENT_ID": "@linkedin_client_id",
-    "LINKEDIN_CLIENT_SECRET": "@linkedin_client_secret",
-    "LINKEDIN_REDIRECT_URI": "@linkedin_redirect_uri"
-  }
+  ]
 }
