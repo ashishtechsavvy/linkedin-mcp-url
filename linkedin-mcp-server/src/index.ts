@@ -1,11 +1,10 @@
 import express from 'express';
 import cors from 'cors';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { registerLinkedInTools } from './tools/linkedin-tools.js';
 import { storeToken } from './services/linkedin.js';
 
-// ─── ENV VALIDATION ─────────────────────────────────────────────────────────
 const REQUIRED_ENV = ['LINKEDIN_CLIENT_ID', 'LINKEDIN_CLIENT_SECRET', 'LINKEDIN_REDIRECT_URI'];
 for (const key of REQUIRED_ENV) {
   if (!process.env[key]) {
@@ -19,42 +18,16 @@ const CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET!;
 const REDIRECT_URI = process.env.LINKEDIN_REDIRECT_URI!;
 const PORT = parseInt(process.env.PORT ?? '3000');
 
-// ─── MCP SERVER ──────────────────────────────────────────────────────────────
-const mcpServer = new McpServer({
-  name: 'linkedin-mcp-server',
-  version: '1.0.0',
-});
-
-registerLinkedInTools(mcpServer);
-
-// ─── EXPRESS APP ─────────────────────────────────────────────────────────────
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ─── OAUTH ROUTES ─────────────────────────────────────────────────────────────
-
-/**
- * Step 1: Redirect user to LinkedIn login
- * Visit: GET /auth/linkedin?user_id=YOUR_USER_ID
- */
 app.get('/auth/linkedin', (req, res) => {
   const userId = req.query.user_id as string;
-  if (!userId) {
-    res.status(400).json({ error: 'user_id query param required' });
-    return;
-  }
-
-  const scopes = [
-    'r_liteprofile',
-    'r_emailaddress',
-    'w_member_social',
-    // Add below if you have LinkedIn approval:
-    // 'r_organization_social',
-    // 'rw_organization_admin',
-  ].join(' ');
+  if (!userId) { res.status(400).json({ error: 'user_id required' }); return; }
 
   const state = Buffer.from(JSON.stringify({ userId, ts: Date.now() })).toString('base64');
+  const scopes = ['r_liteprofile', 'r_emailaddress', 'w_member_social'].join(' ');
 
   const authUrl = new URL('https://www.linkedin.com/oauth/v2/authorization');
   authUrl.searchParams.set('response_type', 'code');
@@ -62,38 +35,20 @@ app.get('/auth/linkedin', (req, res) => {
   authUrl.searchParams.set('redirect_uri', REDIRECT_URI);
   authUrl.searchParams.set('scope', scopes);
   authUrl.searchParams.set('state', state);
-
   res.redirect(authUrl.toString());
 });
 
-/**
- * Step 2: LinkedIn redirects here with ?code=...
- * Exchange code for access token, store it
- */
 app.get('/auth/callback', async (req, res) => {
   const { code, state, error } = req.query as Record<string, string>;
-
-  if (error) {
-    res.status(400).json({ error: `LinkedIn auth denied: ${error}` });
-    return;
-  }
-
-  if (!code || !state) {
-    res.status(400).json({ error: 'Missing code or state from LinkedIn callback' });
-    return;
-  }
+  if (error) { res.status(400).json({ error: `LinkedIn denied: ${error}` }); return; }
+  if (!code || !state) { res.status(400).json({ error: 'Missing code or state' }); return; }
 
   let userId: string;
   try {
-    const decoded = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
-    userId = decoded.userId;
-  } catch {
-    res.status(400).json({ error: 'Invalid state parameter' });
-    return;
-  }
+    userId = JSON.parse(Buffer.from(state, 'base64').toString('utf-8')).userId;
+  } catch { res.status(400).json({ error: 'Invalid state' }); return; }
 
   try {
-    // Exchange code for token
     const tokenRes = await fetch('https://www.linkedin.com/oauth/v2/accessToken', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -105,26 +60,18 @@ app.get('/auth/callback', async (req, res) => {
         client_secret: CLIENT_SECRET,
       }),
     });
-
-    if (!tokenRes.ok) {
-      const err = await tokenRes.json() as { error_description?: string };
-      throw new Error(err.error_description ?? 'Token exchange failed');
-    }
-
+    if (!tokenRes.ok) throw new Error('Token exchange failed');
     const tokenData = await tokenRes.json() as {
       access_token: string;
       expires_in: number;
       refresh_token?: string;
-      refresh_token_expires_in?: number;
     };
 
-    // Fetch person ID
     const profileRes = await fetch('https://api.linkedin.com/v2/me', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
     const profile = await profileRes.json() as { id: string };
 
-    // Store token in memory (replace with Supabase in production)
     storeToken(userId, {
       access_token: tokenData.access_token,
       refresh_token: tokenData.refresh_token,
@@ -134,38 +81,36 @@ app.get('/auth/callback', async (req, res) => {
 
     res.json({
       success: true,
-      message: `LinkedIn authenticated for user ${userId}`,
       person_id: profile.id,
       expires_in_days: Math.floor(tokenData.expires_in / 86400),
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
   }
 });
 
-// ─── MCP ENDPOINT ─────────────────────────────────────────────────────────────
 app.post('/mcp', async (req, res) => {
+  const server = new Server(
+    { name: 'linkedin-mcp-server', version: '1.0.0' },
+    { capabilities: { tools: {} } }
+  );
+  registerLinkedInTools(server);
+
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
   });
-
   res.on('close', () => transport.close());
-
-  await mcpServer.connect(transport);
+  await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 });
 
-// ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'linkedin-mcp-server' });
 });
 
-// ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`LinkedIn MCP Server running on port ${PORT}`);
-  console.log(`MCP endpoint:   POST http://localhost:${PORT}/mcp`);
-  console.log(`Auth start:     GET  http://localhost:${PORT}/auth/linkedin?user_id=YOUR_USER_ID`);
-  console.log(`Auth callback:  GET  http://localhost:${PORT}/auth/callback`);
+  console.log(`LinkedIn MCP Server on port ${PORT}`);
+  console.log(`Auth: GET /auth/linkedin?user_id=YOUR_ID`);
+  console.log(`MCP:  POST /mcp`);
 });
