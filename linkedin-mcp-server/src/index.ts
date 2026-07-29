@@ -109,8 +109,11 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'linkedin-mcp-server' });
 });
 
-app.listen(PORT, () => {
-  console.log(`LinkedIn MCP Server on port ${PORT}`);
-  console.log(`Auth: GET /auth/linkedin?user_id=YOUR_ID`);
-  console.log(`MCP:  POST /mcp`);
-});
+// For local dev
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`LinkedIn MCP Server on port ${PORT}`);
+  });
+}
+
+module.exports = app;
