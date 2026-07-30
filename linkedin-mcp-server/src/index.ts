@@ -70,18 +70,23 @@ app.get('/auth/callback', async (req, res) => {
     const profileRes = await fetch('https://api.linkedin.com/v2/userinfo', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
-    const profile = await profileRes.json() as { sub: string };
+    const profileText = await profileRes.text();
+    console.log('Profile raw response:', profileText);
+    const profile = JSON.parse(profileText) as { sub?: string; id?: string };
+
+    const personId = profile.sub ?? profile.id ?? 'unknown';
 
     storeToken(userId, {
       access_token: tokenData.access_token,
       refresh_token: tokenData.refresh_token,
       expires_at: Date.now() + tokenData.expires_in * 1000,
-      person_id: profile.sub,
+      person_id: personId,
     });
 
     res.json({
       success: true,
-      person_id: profile.sub,
+      person_id: personId,
+      profile_raw: profile,
       expires_in_days: Math.floor(tokenData.expires_in / 86400),
     });
   } catch (err) {
