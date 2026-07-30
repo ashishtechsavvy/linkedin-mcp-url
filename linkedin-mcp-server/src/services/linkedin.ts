@@ -5,14 +5,41 @@ const LINKEDIN_AUTH_BASE = 'https://www.linkedin.com/oauth/v2';
 
 // In production, replace with Supabase token store
 // For local dev, use environment variables or a simple JSON file
-const tokenStore = new Map<string, LinkedInToken>();
+import { createClient } from '@supabase/supabase-js';
 
-export function storeToken(userId: string, token: LinkedInToken): void {
-  tokenStore.set(userId, token);
+function getSupabase() {
+  return createClient(
+    process.env.SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_KEY!
+  );
 }
 
-export function getToken(userId: string): LinkedInToken | undefined {
-  return tokenStore.get(userId);
+export async function storeToken(userId: string, token: LinkedInToken): Promise<void> {
+  const supabase = getSupabase();
+  await supabase.from('linkedin_tokens').upsert({
+    user_id: userId,
+    access_token: token.access_token,
+    refresh_token: token.refresh_token ?? null,
+    expires_at: new Date(token.expires_at).toISOString(),
+    person_id: token.person_id ?? null,
+    updated_at: new Date().toISOString(),
+  });
+}
+
+export async function getToken(userId: string): Promise<LinkedInToken | undefined> {
+  const supabase = getSupabase();
+  const { data } = await supabase
+    .from('linkedin_tokens')
+    .select('*')
+    .eq('user_id', userId)
+    .single();
+  if (!data) return undefined;
+  return {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_at: new Date(data.expires_at).getTime(),
+    person_id: data.person_id,
+  };
 }
 
 export function isTokenExpired(token: LinkedInToken): boolean {
