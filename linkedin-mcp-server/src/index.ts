@@ -110,6 +110,27 @@ app.post('/mcp', async (req, res) => {
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'linkedin-mcp-server' });
 });
+app.get('/debug-supabase', async (_req, res) => {
+  try {
+    const { createClient } = await import('@supabase/supabase-js');
+    const supabase = createClient(
+      process.env.SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_KEY!
+    );
+    const { data, error } = await supabase
+      .from('linkedin_tokens')
+      .select('user_id')
+      .limit(1);
+    res.json({
+      supabase_url: process.env.SUPABASE_URL ?? 'MISSING',
+      service_key_set: !!process.env.SUPABASE_SERVICE_KEY,
+      data,
+      error,
+    });
+  } catch (err) {
+    res.json({ error: err instanceof Error ? err.message : 'unknown' });
+  }
+});
 
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
