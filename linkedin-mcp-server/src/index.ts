@@ -67,10 +67,10 @@ app.get('/auth/callback', async (req, res) => {
       refresh_token?: string;
     };
 
-    const profileRes = await fetch('https://api.linkedin.com/v2/me', {
-      headers: { Authorization: `Bearer ${tokenData.access_token}` },
-    });
-    const profile = await profileRes.json() as { id: string };
+    const profileRes = await fetch('https://api.linkedin.com/v2/userinfo', {
+  headers: { Authorization: `Bearer ${tokenData.access_token}` },
+});
+const profile = await profileRes.json() as { sub: string };
 
     storeToken(userId, {
       access_token: tokenData.access_token,
