@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { registerLinkedInTools } from './tools/linkedin-tools.js';
 import { storeToken } from './services/linkedin.js';
 
-const REQUIRED_ENV = ['LINKEDIN_CLIENT_ID', 'LINKEDIN_CLIENT_SECRET', 'LINKEDIN_REDIRECT_URI'];
+const REQUIRED_ENV = ['LINKEDIN_CLIENT_ID', 'LINKEDIN_CLIENT_SECRET', 'LINKEDIN_REDIRECT_URI', 'SUPABASE_URL', 'SUPABASE_SERVICE_KEY'];
 for (const key of REQUIRED_ENV) {
   if (!process.env[key]) {
     console.error(`Missing required env var: ${key}`);
@@ -71,12 +71,10 @@ app.get('/auth/callback', async (req, res) => {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
     const profileText = await profileRes.text();
-    console.log('Profile raw response:', profileText);
     const profile = JSON.parse(profileText) as { sub?: string; id?: string };
-
     const personId = profile.sub ?? profile.id ?? 'unknown';
 
-    storeToken(userId, {
+    await storeToken(userId, {
       access_token: tokenData.access_token,
       refresh_token: tokenData.refresh_token,
       expires_at: Date.now() + tokenData.expires_in * 1000,
@@ -86,7 +84,6 @@ app.get('/auth/callback', async (req, res) => {
     res.json({
       success: true,
       person_id: personId,
-      profile_raw: profile,
       expires_in_days: Math.floor(tokenData.expires_in / 86400),
     });
   } catch (err) {
