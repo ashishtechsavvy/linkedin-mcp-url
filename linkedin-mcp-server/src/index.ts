@@ -27,7 +27,7 @@ app.get('/auth/linkedin', (req, res) => {
   if (!userId) { res.status(400).json({ error: 'user_id required' }); return; }
 
   const state = Buffer.from(JSON.stringify({ userId, ts: Date.now() })).toString('base64');
- const scopes = ['w_member_social'].join(' ');
+  const scopes = ['openid', 'profile', 'w_member_social'].join(' ');
 
   const authUrl = new URL('https://www.linkedin.com/oauth/v2/authorization');
   authUrl.searchParams.set('response_type', 'code');
