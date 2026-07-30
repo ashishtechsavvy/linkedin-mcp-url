@@ -68,20 +68,20 @@ app.get('/auth/callback', async (req, res) => {
     };
 
     const profileRes = await fetch('https://api.linkedin.com/v2/userinfo', {
-  headers: { Authorization: `Bearer ${tokenData.access_token}` },
-});
-const profile = await profileRes.json() as { sub: string };
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+    const profile = await profileRes.json() as { sub: string };
 
     storeToken(userId, {
       access_token: tokenData.access_token,
       refresh_token: tokenData.refresh_token,
       expires_at: Date.now() + tokenData.expires_in * 1000,
-      person_id: profile.id,
+      person_id: profile.sub,
     });
 
     res.json({
       success: true,
-      person_id: profile.id,
+      person_id: profile.sub,
       expires_in_days: Math.floor(tokenData.expires_in / 86400),
     });
   } catch (err) {
@@ -109,7 +109,6 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'linkedin-mcp-server' });
 });
 
-// For local dev
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
     console.log(`LinkedIn MCP Server on port ${PORT}`);
