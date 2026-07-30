@@ -103,7 +103,7 @@ export function registerLinkedInTools(server: Server): void {
       switch (name) {
 
         case 'linkedin_check_auth': {
-          const token = getToken(a.user_id as string);
+          const token = await getToken(a.user_id as string);
           return { content: [{ type: 'text', text: JSON.stringify({
             authenticated: !!token,
             hasRefreshToken: !!token?.refresh_token,
